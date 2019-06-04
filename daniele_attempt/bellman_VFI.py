@@ -9,6 +9,7 @@ from numba import njit
 import scipy.optimize as opt
 import scipy.linalg as linalg
 import matplotlib.pyplot as plt
+#import quantecon
 
 alpha = 0.64        #labor share
 beta = 0.98267      #discount factor 
@@ -63,6 +64,8 @@ def backward_VFI(VE_p, VU_p, Pi_p, a_grid, e_grid, r, w, beta, B, h, gamma):
 
     #initializing next period V
     V = np.zeros([N,M])
+    apol = np.zeros([N,M])
+    cpol = np.zeros([N,M])
     #computing consumption in each scenario
     a_tom = np.tile(a_grid,(N,1))
     a_tod = np.transpose(a_tom)
@@ -117,6 +120,3 @@ plt.plot(a_grid,VE_p[:,1],label="Employed")
 plt.plot(a_grid,VU_p[:,1],label="Unemployed")
 plt.legend(bbox_to_anchor=(0., 1.02, 1., .102), loc=3,
            ncol=2, mode="expand", borderaxespad=0.)    
-
-plt.legend("1","2")
-plt.show()
