@@ -9,7 +9,7 @@ from rec_block import recursive
 '''Part 1: Steady state'''
 
 
-def backward_iterate(Va_p, Pi_p, a_grid, e_grid, r, w, beta=0.95, eis=1, hbar=1/3,B_Bar=166.3,gamma=0.4,a_lower=-0):
+def backward_iterate(Va_p, Pi_p, a_grid, e_grid, r, w, beta, eis, hbar,B_Bar,gamma,a_lower):
     """Single backward iteration step using endogenous gridpoint method for households with CRRA utility.
 
     Order of returns matters! backward_var, assets, others
@@ -45,7 +45,7 @@ def backward_iterate(Va_p, Pi_p, a_grid, e_grid, r, w, beta=0.95, eis=1, hbar=1/
     nextvalue= (beta * Pi_p) @ Va_p
     amax=a_grid[-1]
         
-    c_grid= mathutils.agrid(amax=a_grid[-1], n=a_grid.shape[0]*5)*(1+r)+0.0000001
+    c_grid= mathutils.agrid(amax=a_grid[-1], n=a_grid.shape[0]*5)*(1+r)+0.01
     
     ###working
     disutility=B_Bar*hbar**(1+1/gamma)/(1+1/gamma)
@@ -65,6 +65,7 @@ def backward_iterate(Va_p, Pi_p, a_grid, e_grid, r, w, beta=0.95, eis=1, hbar=1/
  
     ###Not working
     coh_nw = (1 + r) * a_grid[np.newaxis, :] 
+    
     tobeadded_nw=np.empty_like(a_next_w)
     a_next_nw=coh_nw[:,:,np.newaxis]-c_grid[np.newaxis,np.newaxis,:]+tobeadded_nw
     a_next_nw[a_next_nw>amax]=amax
@@ -78,10 +79,11 @@ def backward_iterate(Va_p, Pi_p, a_grid, e_grid, r, w, beta=0.95, eis=1, hbar=1/
     a_nw=coh_nw-c_nw
     
     ####Compare
-    h=Va_w>Va_nw
+    hh=(Va_w>Va_nw)*1
     Va=np.maximum(Va_w,Va_nw)
     c=c_w*(Va_w>Va_nw)+c_nw*(Va_w<=Va_nw)
     a=a_w*(Va_w>Va_nw)+a_nw*(Va_w<=Va_nw)
+    a[a>a_grid[a_grid.shape[0]-1]]=a_grid[a_grid.shape[0]-1]
 # =============================================================================
 #     h=np.empty_like(Va_p)
 #     Va=Va_w
@@ -90,10 +92,10 @@ def backward_iterate(Va_p, Pi_p, a_grid, e_grid, r, w, beta=0.95, eis=1, hbar=1/
 # =============================================================================
     ###Compare working and nonworking 
     
-    return Va, a, c, h
+    return Va, a, c, hh
 
 
-def pol_ss(Pi, e_grid, a_grid, r, w, beta, eis, hbar=1/3, Va_seed=None, tol=1E-6, maxit=5000):
+def pol_ss(Pi, e_grid, a_grid, r, w, beta, eis, hbar,B_Bar,gamma,a_lower, Va_seed=None, tol=1E-6, maxit=5000):
     """Find steady state policy functions."""
     if Va_seed is None:
         #coh = (1 + r) * a_grid[np.newaxis, :] + w * hbar * e_grid[:, np.newaxis]
@@ -105,7 +107,7 @@ def pol_ss(Pi, e_grid, a_grid, r, w, beta, eis, hbar=1/3, Va_seed=None, tol=1E-6
     # iterate until convergence of a policy by tol or reach max number of iterations
     a = np.empty_like(a_grid)
     for it in range(maxit):
-        Vanew, anew, c, h = backward_iterate(Va, Pi, a_grid, e_grid, r, w, beta, eis,hbar=1/3,B_Bar=166.3,gamma=0.4,a_lower=0)
+        Vanew, anew, c, hh = backward_iterate(Va, Pi, a_grid, e_grid, r, w, beta, eis,hbar,B_Bar,gamma,a_lower)
 # =============================================================================
 #         if it % 10 == 1:
 #             print(np.max(np.abs(Va - Vanew)))
@@ -118,32 +120,33 @@ def pol_ss(Pi, e_grid, a_grid, r, w, beta, eis, hbar=1/3, Va_seed=None, tol=1E-6
     else:
         print(f'No convergence after {maxit} backward iterations!')
 
-    return Va, a, c, h
+    return Va, a, c, hh
 
 
-def household_ss(Pi, a_grid, e_grid, r, w, beta, eis, hbar,Va_seed=None, D_seed=None, pi_seed=None):
+def household_ss(Pi, a_grid, e_grid, r, w, beta, eis, hbar,B_Bar,gamma,a_lower,Va_seed=None, D_seed=None, pi_seed=None):
     """Solve for steady-state policies and distribution. Report results in dict."""
     # solve ha block
-    Va, a, c, h  = pol_ss(Pi, e_grid, a_grid, r, w, beta, eis, hbar, Va_seed)
+    Va, a, c, hh  = pol_ss(Pi, e_grid, a_grid, r, w, beta, eis, hbar,B_Bar,gamma,a_lower, Va_seed)
     D = mathutils.dist_ss(a, Pi, a_grid, D_seed, pi_seed)
 
     # return dictionary with results and inputs
-    inputs = {'Pi': Pi, 'a_grid': a_grid, 'e_grid': e_grid, 'r': r, 'w': w, 'beta': beta, 'eis': eis}
-    results = {'D': D, 'Va': Va, 'a': a, 'c': c, 'A': np.vdot(D, a), 'C': np.vdot(D, c),'H': np.vdot(D, h)}
+    inputs = {'Pi': Pi, 'a_grid': a_grid, 'e_grid': e_grid, 'r': r, 'w': w, 'beta': beta, 'eis': eis, 'hbar': hbar, 'B_Bar': B_Bar, 'gamma': gamma, 'a_lower': a_lower}
+    results = {'D': D, 'Va': Va, 'a': a, 'c': c, 'hh': hh, 'A': np.vdot(D, a), 'C': np.vdot(D, c),'H': np.vdot(D, hh)}
 
     return {**inputs, **results}
 
 
-def K_supply_demand(Pi, a_grid, e_grid, r, w, beta, eis,hbar,alpha):
-    result=household_ss(Pi, a_grid, e_grid, r, w, beta, eis, hbar)
+def K_supply_demand(Pi, a_grid, e_grid, r, w, beta, eis,hbar,B_Bar,gamma,a_lower,alpha,delta):
+    w=(1 - alpha) *  (alpha  / (r+delta)) ** (alpha / (1 - alpha))
+    result=household_ss(Pi, a_grid, e_grid, r, w, beta, eis, hbar,B_Bar,gamma,a_lower)
     supply=result['A']
-    labor=result['H']
-    demand=(result['r']/alpha)** (1/(alpha-1))*labor
+    labor=result['H']*hbar
+    demand=((result['r']+delta)/alpha)** (1/(alpha-1))*labor
     
     return supply-demand
 
 
-def ks_ss(lb=0.98, ub=0.999, beta=0.98267, eis=1, delta=0.025, alpha=0.64, b=0.15, nA=100, amax=20,hbar=1/3):
+def ks_ss(r_min=0.001, r_max=0.06, beta=0.98267, eis=1, delta=0.025, alpha=0.64, b=0.15, nA=100, amax=200,hbar=1/3,B_Bar=166.3,gamma=0.4,a_lower=0):
     """Solve steady state of full GE model. Calibrate beta to hit target for interest rate."""
     # set up grid
     a_grid = mathutils.agrid(amax=amax, n=nA)
@@ -161,9 +164,9 @@ def ks_ss(lb=0.98, ub=0.999, beta=0.98267, eis=1, delta=0.025, alpha=0.64, b=0.1
 # =============================================================================
 
     # solve for beta consistent with this
-    r_min = 0
-    r_max = 0.04
-    sol = opt.root_scalar(lambda rr: K_supply_demand(Pi, a_grid, e_grid, rr, (1 - alpha) *  (alpha  / (rr+delta)) ** (alpha / (1 - alpha)), beta, eis, hbar, alpha),
+    #r_min = 0.001
+    #r_max = 0.06
+    sol = opt.root_scalar(lambda rr: K_supply_demand(Pi, a_grid, e_grid, rr, (1 - alpha) *  (alpha  / (rr+delta)) ** (alpha / (1 - alpha)), beta, eis, hbar,B_Bar,gamma,a_lower, alpha,delta),
                           bracket=[r_min, r_max], method='brentq')
     if sol.converged:
         r = sol.root
@@ -172,13 +175,14 @@ def ks_ss(lb=0.98, ub=0.999, beta=0.98267, eis=1, delta=0.025, alpha=0.64, b=0.1
         
     w=(1 - alpha) *  (alpha  / (r+delta)) ** (alpha / (1 - alpha))
     Z= 1
-    result=household_ss(Pi, a_grid, e_grid, r, w, beta, eis)
-    K= result['A']
-    L= result['H']
-    Y= K ** alpha * L ** (1 - alpha)
+    
+    
 
     # extra evaluation to report variables
-    ss = household_ss(Pi, a_grid, e_grid, r, w, beta, eis)
+    ss = household_ss(Pi, a_grid, e_grid, r, w, beta, eis, hbar,B_Bar,gamma,a_lower)
+    L= ss['H']*hbar
+    K= ((ss['r']+delta)/alpha)** (1/(alpha-1))*L
+    Y= K ** alpha * L ** (1 - alpha)
     mpc = mathutils.mpcs(ss['c'], ss['a_grid'], ss['r'])
     ss.update({'mpc': mpc, 'MPC': np.vdot(ss['D'], mpc),
                'w': w, 'Z': Z, 'K': K, 'L': L, 'Y': Y, 'alpha': alpha, 'delta': delta,
