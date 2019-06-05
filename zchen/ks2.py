@@ -79,7 +79,7 @@ def backward_iterate(Va_p, Pi_p, a_grid, e_grid, r, w, beta, eis, hbar,B_Bar,gam
     a_nw=coh_nw-c_nw
     
     ####Compare
-    hh=(Va_w>Va_nw)*1
+    hh=(Va_w>Va_nw)*hbar
     Va=np.maximum(Va_w,Va_nw)
     c=c_w*(Va_w>Va_nw)+c_nw*(Va_w<=Va_nw)
     a=a_w*(Va_w>Va_nw)+a_nw*(Va_w<=Va_nw)
@@ -99,7 +99,7 @@ def pol_ss(Pi, e_grid, a_grid, r, w, beta, eis, hbar,B_Bar,gamma,a_lower, Va_see
     """Find steady state policy functions."""
     if Va_seed is None:
         #coh = (1 + r) * a_grid[np.newaxis, :] + w * hbar * e_grid[:, np.newaxis]
-        coh = (1 + r) * a_grid[np.newaxis, :] + hbar * e_grid[:, np.newaxis]
+        coh = (1 + r) * (a_grid[np.newaxis, :]-a_lower) + hbar * e_grid[:, np.newaxis]
         Va = np.log(coh) 
     else:
         Va = Va_seed
@@ -140,16 +140,16 @@ def K_supply_demand(Pi, a_grid, e_grid, r, w, beta, eis,hbar,B_Bar,gamma,a_lower
     w=(1 - alpha) *  (alpha  / (r+delta)) ** (alpha / (1 - alpha))
     result=household_ss(Pi, a_grid, e_grid, r, w, beta, eis, hbar,B_Bar,gamma,a_lower)
     supply=result['A']
-    labor=result['H']*hbar
+    labor=result['H']
     demand=((result['r']+delta)/alpha)** (1/(alpha-1))*labor
     
     return supply-demand
 
 
-def ks_ss(r_min=0.001, r_max=0.06, beta=0.98267, eis=1, delta=0.025, alpha=0.64, b=0.15, nA=100, amax=200,hbar=1/3,B_Bar=166.3,gamma=0.4,a_lower=0):
+def ks_ss(r_min=0.001, r_max=0.06, beta=0.98267, eis=1, delta=0.025, alpha=0.64, b=0.15, nA=100, amax=200,hbar=1/3,B_Bar=166.3,gamma=0.4,a_lower=-0.2):
     """Solve steady state of full GE model. Calibrate beta to hit target for interest rate."""
     # set up grid
-    a_grid = mathutils.agrid(amax=amax, n=nA)
+    a_grid = mathutils.agrid(amax=amax, n=nA)+a_lower
     #L = pUE / (pUE + pEU)  # labor endowment normalized to 1
     e_grid = mathutils.markov_tauchen(rho=0.929, sigma=0.227, N=5, m=3)[0]
     Pi = mathutils.markov_tauchen(rho=0.929, sigma=0.227, N=5, m=3)[2]
@@ -180,7 +180,7 @@ def ks_ss(r_min=0.001, r_max=0.06, beta=0.98267, eis=1, delta=0.025, alpha=0.64,
 
     # extra evaluation to report variables
     ss = household_ss(Pi, a_grid, e_grid, r, w, beta, eis, hbar,B_Bar,gamma,a_lower)
-    L= ss['H']*hbar
+    L= ss['H']
     K= ((ss['r']+delta)/alpha)** (1/(alpha-1))*L
     Y= K ** alpha * L ** (1 - alpha)
     mpc = mathutils.mpcs(ss['c'], ss['a_grid'], ss['r'])
@@ -205,18 +205,25 @@ def firm(K, L, Z, alpha, delta):
 def get_J(ss, T):
     """Compute Jacobians along computational graph: for r, w, curlyK as functions of Z and K."""
 
-    # firm Jacobian: r and w as functions of Z and K
-    J_firm = rec.all_Js(firm, ss, T, ['K', 'Z'])
+    # firm Jacobian: r and w as functions of Z and K L
+    J_firm = rec.all_Js(firm, ss, T, ['K', 'Z', 'L'])
 
     # household Jacobian: curlyK (called 'a' for assets by J_ha) as function of r and w
     J_ha = het.all_Js(backward_iterate, ss, T, {'r': {'r': 1}, 'w': {'w': 1}})
 
-    # compose to get curlyK as function of Z and K
+    # compose to get curlyK as function of Z and K L
     J_curlyK_K = J_ha['a']['r'] @ J_firm['r']['K'] + J_ha['a']['w'] @ J_firm['w']['K']
     J_curlyK_Z = J_ha['a']['r'] @ J_firm['r']['Z'] + J_ha['a']['w'] @ J_firm['w']['Z']
+    J_curlyK_L = J_ha['a']['r'] @ J_firm['r']['L'] + J_ha['a']['w'] @ J_firm['w']['L']
+    
+    # compose to get curlyL as function of Z and K L
+    J_curlyL_K = J_ha['hh']['r'] @ J_firm['r']['K'] + J_ha['hh']['w'] @ J_firm['w']['K']
+    J_curlyL_Z = J_ha['hh']['r'] @ J_firm['r']['Z'] + J_ha['hh']['w'] @ J_firm['w']['Z']
+    J_curlyL_L = J_ha['hh']['r'] @ J_firm['r']['L'] + J_ha['hh']['w'] @ J_firm['w']['L']
+
 
     # now combine all into a single jacobian that gives r, w, curlyK as functions of Z and K
-    J = {**J_firm, 'curlyK': {'K': J_curlyK_K, 'Z': J_curlyK_Z}}
+    J = {**J_firm, 'curlyK': {'K': J_curlyK_K, 'Z': J_curlyK_Z, 'L': J_curlyK_L}, 'curlyL': {'K': J_curlyL_K, 'Z': J_curlyL_Z, 'L': J_curlyL_L}}
 
     return J
 
@@ -224,17 +231,26 @@ def get_J(ss, T):
 def get_G(J, T):
     """Solve for equilibrium G matrices: K, r, w as functions of Z."""
 
-    # obtain H_K, H_Z
+    # obtain H_K, H_Z, H_L
     H_K = J['curlyK']['K'] - np.eye(T)
     H_Z = J['curlyK']['Z']
+    H_L = J['curlyK']['L']
+    
+    # obtain G_K, G_Z, G_L
+    G_K = J['curlyL']['K'] 
+    G_Z = J['curlyL']['Z']
+    G_L = J['curlyL']['L'] - np.eye(T)
 
     # solve for K as function of Z
-    G = {'K': -np.linalg.solve(H_K, H_Z)}  # H_K^(-1)H_Z
+    coef_k=np.linalg.solve(G_K-G_L @ np.linalg.solve(H_L, H_K),G_L @ np.linalg.solve(H_L, H_Z)-G_Z)
+    coef_L=np.linalg.solve(G_L-G_K @ np.linalg.solve(H_K, H_L),G_K @ np.linalg.solve(H_K, H_Z)-G_Z)
+
+    G = {'K': coef_k, 'L': coef_L }  
 
     # solve for r, w, Y as functions of Z too
-    G['r'] = J['r']['Z'] + J['r']['K'] @ G['K']
-    G['w'] = J['w']['Z'] + J['w']['K'] @ G['K']
-    G['Y'] = J['Y']['Z'] + J['Y']['K'] @ G['K']
+    G['r'] = J['r']['Z'] + J['r']['K'] @ G['K']+J['r']['L'] @ G['L']
+    G['w'] = J['w']['Z'] + J['w']['K'] @ G['K']+J['w']['L'] @ G['L']
+    G['Y'] = J['Y']['Z'] + J['Y']['K'] @ G['K']+J['Y']['L'] @ G['L']
 
     return G
 
