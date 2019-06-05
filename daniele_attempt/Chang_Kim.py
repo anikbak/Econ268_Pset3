@@ -40,8 +40,10 @@ from numba import njit
 import scipy.optimize as opt
 import scipy.linalg as linalg
 import matplotlib.pyplot as plt
+import time
 import sys
-sys.path.append('C:\\Users\\danic\\Desktop\\hw3\\Econ268_Pset3\\daniele_attempt')
+#sys.path.append('C:\\Users\\danic\\Desktop\\hw3\\Econ268_Pset3\\daniele_attempt')
+sys.path.append('/home/david/Desktop/Econ268_Pset3/daniele_attempt')
 
 import mathutils
 import het_block as het
@@ -90,7 +92,7 @@ import ks
 # In[2]:
 
 
-def backward_VFI(VE_p, VU_p, Us, Pi_p, a_grid, e_grid, params, w, h):
+def backward_VFI(VE_p, VU_p, Us, Pi_p, a_grid, e_grid, params, w, h, r):
     """Computes one backward iteration in the VFI algorithm
     Parameters
     ----------
@@ -104,6 +106,7 @@ def backward_VFI(VE_p, VU_p, Us, Pi_p, a_grid, e_grid, params, w, h):
     params   : dictionary with useful parameters
     w        : scalar, wage
     h        : hours worked
+    r        : interest rate
 
     Returns
     ----------
@@ -113,29 +116,21 @@ def backward_VFI(VE_p, VU_p, Us, Pi_p, a_grid, e_grid, params, w, h):
     """
     #getting parameters
     beta = params['beta']
-    w = params['w']
-    r = params['r']
-    h = params['h']
     N = params['N']
     M = params['M']
 
     #initializing next period V
     V = np.zeros([N,M])
-    apol = np.zeros([N,M])
-    cpol = np.zeros([N,M])
-
+    
     ExpV = np.maximum(VE_p,VU_p)
-
-
-    tomax = Us + np.tile(ExpV @ (beta * Pi_p),(N,1,1))    
-    max_locs = np.argmax(tomax,axis=1)
-    #apol = a_grid[max_locs]
-    #cpol = w*e_grid*h + - apol + (1+r)*a_grid[:,np.newaxis]
-    #V = np.amax(tomax,axis=1)
-    for i in range(M):                    
-        apol[:,i] = a_grid[max_locs[:,i]]
-        cpol[:,i] = w*e_grid[i]*h + (1+r)*a_grid - apol[:,i]
-        V[:,i] = np.max(tomax[:,:,i],axis=1)        
+    
+    tomax = Us + np.tile(ExpV @ (beta * Pi_p),(N,1,1))        
+    max_locs = np.argmax(tomax,axis=1)    
+    apol = a_grid[max_locs]
+    cpol = w*e_grid*h + - apol + (1+r)*a_grid[:,np.newaxis]    
+    
+    for i in range(M):
+        V[:,i] = tomax[range(0,N),max_locs[:,i],i]    
         
     return V, apol, cpol
 
@@ -145,13 +140,11 @@ def backward_VFI(VE_p, VU_p, Us, Pi_p, a_grid, e_grid, params, w, h):
 # In[3]:
 
 
-def pol_ss(Pi, e_grid, a_grid, params, w, h, tol=1E-6, maxit=5000):
+def pol_ss(Pi, e_grid, a_grid, params, w, h, r, tol=1E-6, maxit=5000):
     """Find steady-state policy functions."""        
     
     #getting parameters
-    beta = params['beta']
     gamma = params['gamma']    
-    r = params['r']
     B = params['B']
     N = params['N']
     M = params['M']
@@ -176,21 +169,21 @@ def pol_ss(Pi, e_grid, a_grid, params, w, h, tol=1E-6, maxit=5000):
     VU_p = np.zeros([N,M])     #initializing value function for employed
 
     while dist>tol and it<maxit:        
-        VE, apolE, cpolE = backward_VFI(VE_p, VU_p, Us, Pi, a_grid, e_grid, params, w, h)
-        VU, apolU, cpolU = backward_VFI(VE, VU_p, Us, Pi, a_grid, e_grid, params, w, 0)
-
+        VE, apolE, cpolE = backward_VFI(VE_p, VU_p, Us, Pi, a_grid, e_grid, params, w, h, r)
+        VU, apolU, cpolU = backward_VFI(VE, VU_p, Us, Pi, a_grid, e_grid, params, w, 0, r)
         V_p = np.maximum(VE_p,VU_p)    
         dist = np.amax(abs(V_p - np.maximum(VE,VU)))
         VE_p = np.copy(VE)
         VU_p = np.copy(VU)
-        if it%100==0:
-            print("Iteration # " + str(it) + "- step = " + str(dist))
+        #if it%100==0:
+        #    print("Iteration # " + str(it) + "- step = " + str(dist))
         it = it+1
     #global policy and value functions ()
     a = apolU*(VU_p>=VE_p) + apolE*(VU_p<VE_p)
     c = cpolU*(VU_p>=VE_p) + cpolE*(VU_p<VE_p)
     V = VU_p*(VU_p>=VE_p) + VE_p*(VU_p<VE_p) 
-    return V, a, c
+    e = VE_p>=VU_p
+    return V, a, c, e
 
 
 # In[ ]:
@@ -199,8 +192,10 @@ def pol_ss(Pi, e_grid, a_grid, params, w, h, tol=1E-6, maxit=5000):
 alpha = 0.64        #labor share
 beta = 0.98267      #discount factor 
 gamma = 0.4         #Frisch elasticity
+delta = 0.025       #Capital depreciation rate
 w = 585             #wage
 r = 0.01            #interest rate
+lam = 1             #productivity 
 amax=5000           #maximal assets
 amid = 2000         #up to here lots of points 
 amin=-2             #borrowing limit
@@ -212,14 +207,16 @@ B = 166.3           #disutility of labor
 params = {'alpha':alpha,
           'beta':beta,
           'gamma':gamma,
-          'w':w,
+          'delta':delta,
           'r':r,
+          'w':w,
+          'h':h,
+          'lam':lam,
           'amax':amax,
           'amid':amid,
           'amin':amin,
           'N':N,
           'M':M,
-          'h':h,
           'B':B}
 
 
@@ -246,84 +243,61 @@ Pi = np.array([[1 - pUE, pUE], [pEU, 1 - pEU]])
 # In[70]:
 
 
-def household_ss(Pi, a_grid, e_grid, params):
+def household_ss(Pi, a_grid, e_grid, params, r):
     """Solve for steady-state policies and distribution. Report results in dict."""
     #getting parameters
     beta = params['beta']
     w = params['w']
-    r = params['r']
-    B = params['B']
-    h = params['h']
-    N = params['N']
-    M = params['M']
+    h = params['h']    
+    lam = params['lam']
+    alpha = params['alpha']
 
     # solve ha block
-    V, a, c = pol_ss(Pi, e_grid, a_grid, params, w, h)
+    V, a, c, e = pol_ss(Pi, e_grid, a_grid, params, w, h, r)
     D = mathutils.dist_ss(a, Pi, a_grid)
-
+    A = np.vdot(D, a)
+    C = np.vdot(D, c)
+    L = np.vdot(D,e)*h
+    rnew = lam*(A/L)**(alpha-1)
+    print("r clearing: " + str(rnew - r))
     # return dictionary with results and inputs
     inputs = {'Pi': Pi, 'a_grid': a_grid, 'e_grid': e_grid, 'r': r, 'w': w, 'beta': beta}
-    results = {'D': D, 'V': V, 'a': a, 'c': c, 'A': np.vdot(D, a), 'C': np.vdot(D, c)}
+    results = {'D': D, 'V': V, 'a': a, 'c': c, 'A': A, 'C': C, 'L': L,'rnew':rnew}
 
     return {**inputs, **results}
-
-
-# In[71]:
-t0 = time.time()
-ssres = household_ss(Pi, a_grid, e_grid, params)
-t1 = time.time()
-total = t1-t0
-
-
-# In[72]:
-
-plt.plot(a_grid,ssres['c'][:,1])
-#ssres['D'].shape
-
-
-# ## 2 Calibrating the steady state
-# Next, we calibrate the HA block in general equilibrium. The calibration exercise amounts to finding the right discount factor to hit a targeted annual interest rate conditional on all the other exogenous parameters. We use Brent's method, an efficient way to solve for a root on an interval, from the `scipy.optimize` package to do so.
-# 
-# Although additional efficiency gains would be possible here (for instance, by updating our initial guesses for policy and distribution along the way), we will not implement them, since they are not our focus here.
-# 
-# Our default values depart slightly from the canonical Krusell-Smith calibration, mainly by assuming a lower capital share, which leads to lower steady-state capital and more interesting behavior thanks to higher MPCs.
 
 # In[12]:
 
 
-def ks_ss(lb=0.98, ub=0.999, r=0.01, eis=1, delta=0.025, alpha=0.11, b=0.15, pUE=0.5, pEU=0.038, nA=100, amax=20):
+def ks_ss(params, lr=1e-4, ur=0.2, r=0.01):
     """Solve steady state of full GE model. Calibrate beta to hit target for interest rate."""
-    # set up grid
-    a_grid = mathutils.agrid(amax=amax, n=nA)
-    L = pUE / (pUE + pEU)  # labor endowment normalized to 1
-    e_grid = np.array([b, 1 - (1 - L) / L * b])
-    Pi = np.array([[1 - pUE, pUE], [pEU, 1 - pEU]])
-
+    
+    #extract parameters
+    alpha = params['alpha']
+    delta = params['delta']
     # solve for aggregates analitically
     rk = r + delta
-    Z = (rk / alpha) ** alpha / L ** (1 - alpha)  # normalize so that Y=1
-    K = (alpha * Z / rk) ** (1 / (1 - alpha)) * L
-    Y = Z * K ** alpha * L ** (1 - alpha)
-    w = (1 - alpha) * Z * (alpha * Z / rk) ** (alpha / (1 - alpha))
+    lam = params['lam'] # normalize so that Y=1
+    w = lam*(1-alpha)*(rk/(lam*alpha))**((alpha-1)/alpha)
+    params['w'] = w
+    params['h'] = h
 
-    # solve for beta consistent with this
-    beta_min = lb / (1 + r)
-    beta_max = ub / (1 + r)
-    beta, results = opt.brentq(lambda bet:
-                               household_ss(Pi, a_grid, e_grid, r, w, bet, eis)['A'] - K,
-                               beta_min, beta_max, full_output=True)
+    # solve for r consistent with market clearing
+    beta, results = opt.brentq(lambda r:
+                               household_ss(Pi, a_grid, e_grid, params, r)['rnew'] - rk,
+                               lr, ur, full_output=True)
     if not results.converged:
         raise ValueError('Steady-state solver did not converge.')
 
     # extra evaluation to report variables
-    ss = household_ss(Pi, a_grid, e_grid, r, w, beta, eis)
-    mpc = mathutils.mpcs(ss['c'], ss['a_grid'], ss['r'])
-    ss.update({'mpc': mpc, 'MPC': np.vdot(ss['D'], mpc),
-               'w': w, 'Z': Z, 'K': K, 'L': L, 'Y': Y, 'alpha': alpha, 'delta': delta,
-               'goods_mkt': Y - ss['C'] - delta * K})
+    ss = household_ss(Pi, a_grid, e_grid, params, r)
+    Y = lam*ss['A']**(alpha)*ss['L']**(1-alpha)
+    #mpc = mathutils.mpcs(ss['c'], ss['a_grid'], ss['r'])
+    #ss.update({'mpc': mpc, 'MPC': np.vdot(ss['D'], mpc),
+    ss.update({'w': w, 'lam': lam, 'K': ss['A'], 'L': L, 'Y': Y, 'alpha': alpha, 'delta': delta,
+               'goods_mkt': Y - ss['C'] - delta * ss['A']})
 
     return ss
-
 
 # Let's solve for the steady state using our default calibration, and plot the consumption policy function for unemployed and employed households as a function of assets.
 
