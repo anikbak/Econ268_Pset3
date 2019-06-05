@@ -90,21 +90,20 @@ import ks
 # In[2]:
 
 
-def backward_VFI(VE_p, VU_p, Pi_p, a_grid, e_grid, r, w, beta, B, h, gamma):
+def backward_VFI(VE_p, VU_p, Us, Pi_p, a_grid, e_grid, params, w, h):
     """Computes one backward iteration in the VFI algorithm
     Parameters
     ----------
     VE_p     : array (S*A), next period value function for employed
     VU_p     : array (S*A), next period value function for unemployed
+    Us       : array (S*S), utility for all possible combinations of assets 
+               today and tomorrow
     Pi_p     : array (S*S), Markov matrix for skills tomorrow
     a_grid   : array (A), asset grid
     e_grid   : array (A), skill grid
-    r        : scalar, ex-post interest rate
+    params   : dictionary with useful parameters
     w        : scalar, wage
-    beta     : scalar, discount rate today
-    B        : disutility of labor
     h        : hours worked
-    gamma    : Frisch elasticity
 
     Returns
     ----------
@@ -112,33 +111,31 @@ def backward_VFI(VE_p, VU_p, Pi_p, a_grid, e_grid, r, w, beta, B, h, gamma):
     a  : array (S*A), asset policy today
     c  : array (S*A), consumption policy today
     """
-    N = len(a_grid)
-    M = len(e_grid)
+    #getting parameters
+    beta = params['beta']
+    w = params['w']
+    r = params['r']
+    h = params['h']
+    N = params['N']
+    M = params['M']
 
     #initializing next period V
     V = np.zeros([N,M])
     apol = np.zeros([N,M])
     cpol = np.zeros([N,M])
-    #computing consumption in each scenario
-    a_tom = np.tile(a_grid,(N,1))
-    a_tod = np.transpose(a_tom)
-    atmp = (1+r)*a_tod - a_tom
-    Cs = np.tile(w*e_grid*h,(N,N,1)) +  np.repeat(atmp[:, :, np.newaxis], M, axis=2)
-    
-    #imposing -Inf utility whenever there is negative consumption
-    neg_c = (Cs <= 0)
-    Cs[neg_c] = 10
-    Us = np.log(Cs) - B*(h**(1 + 1/gamma))/(1+ 1/gamma)
-    Us[neg_c] = -1e10
 
     ExpV = np.maximum(VE_p,VU_p)
 
-    for i in range(M):        
-        tomax = Us[:,:,i] +  np.tile(ExpV @ (beta * Pi_p[i,]),(N,1))
-        max_locs = np.argmax(tomax,axis=1)
-        apol[:,i] = a_grid[max_locs]
+
+    tomax = Us + np.tile(ExpV @ (beta * Pi_p),(N,1,1))    
+    max_locs = np.argmax(tomax,axis=1)
+    #apol = a_grid[max_locs]
+    #cpol = w*e_grid*h + - apol + (1+r)*a_grid[:,np.newaxis]
+    #V = np.amax(tomax,axis=1)
+    for i in range(M):                    
+        apol[:,i] = a_grid[max_locs[:,i]]
         cpol[:,i] = w*e_grid[i]*h + (1+r)*a_grid - apol[:,i]
-        V[:,i] = np.max(tomax,axis=1)
+        V[:,i] = np.max(tomax[:,:,i],axis=1)        
         
     return V, apol, cpol
 
@@ -148,18 +145,39 @@ def backward_VFI(VE_p, VU_p, Pi_p, a_grid, e_grid, r, w, beta, B, h, gamma):
 # In[3]:
 
 
-def pol_ss(Pi, e_grid, a_grid, r, w, beta, B, h, gamma, tol=1E-8, maxit=5000):
+def pol_ss(Pi, e_grid, a_grid, params, w, h, tol=1E-6, maxit=5000):
     """Find steady-state policy functions."""        
+    
+    #getting parameters
+    beta = params['beta']
+    gamma = params['gamma']    
+    r = params['r']
+    B = params['B']
+    N = params['N']
+    M = params['M']
+
+    #Computing consumption in each scenario
+    a_tom = np.tile(a_grid,(N,1))
+    a_tod = np.transpose(a_tom)
+    atmp = (1+r)*a_tod - a_tom    
+    Cs = np.tile(w*e_grid*h,(N,N,1)) +  np.repeat(atmp[:, :, np.newaxis], M, axis=2)
+    #imposing -Inf utility whenever there is negative consumption
+    neg_c = (Cs <= 0)
+    Cs[neg_c] = 10
+    Us = np.log(Cs) - B*(h**(1 + 1/gamma))/(1+ 1/gamma)
+    Us[neg_c] = -1e10
+
     #initializing VFI 
     dist = np.inf   #improvement step
     it = 0          #iteration number
 
+
     VE_p = np.zeros([N,M])     #initializing value function for employed
     VU_p = np.zeros([N,M])     #initializing value function for employed
 
-    while dist>tol and it<maxit:
-        VE, apolE, cpolE = backward_VFI(VE_p, VU_p, Pi, a_grid, e_grid, r, w, beta, B, h, gamma)
-        VU, apolU, cpolU = backward_VFI(VE_p, VU_p, Pi, a_grid, e_grid, r, w, beta, B, 0, gamma)
+    while dist>tol and it<maxit:        
+        VE, apolE, cpolE = backward_VFI(VE_p, VU_p, Us, Pi, a_grid, e_grid, params, w, h)
+        VU, apolU, cpolU = backward_VFI(VE, VU_p, Us, Pi, a_grid, e_grid, params, w, 0)
 
         V_p = np.maximum(VE_p,VU_p)    
         dist = np.amax(abs(V_p - np.maximum(VE,VU)))
@@ -186,10 +204,23 @@ r = 0.01            #interest rate
 amax=5000           #maximal assets
 amid = 2000         #up to here lots of points 
 amin=-2             #borrowing limit
-N = 200            #number of grid points for assets
+N = 1000            #number of grid points for assets
 M = 2               #number of grid points for productivity
 h = 1/3             #hours worked
 B = 166.3           #disutility of labor
+
+params = {'alpha':alpha,
+          'beta':beta,
+          'gamma':gamma,
+          'w':w,
+          'r':r,
+          'amax':amax,
+          'amid':amid,
+          'amin':amin,
+          'N':N,
+          'M':M,
+          'h':h,
+          'B':B}
 
 
 # set up grid
@@ -215,10 +246,19 @@ Pi = np.array([[1 - pUE, pUE], [pEU, 1 - pEU]])
 # In[70]:
 
 
-def household_ss(Pi, a_grid, e_grid, r, w, beta, B, h, gamma):
+def household_ss(Pi, a_grid, e_grid, params):
     """Solve for steady-state policies and distribution. Report results in dict."""
+    #getting parameters
+    beta = params['beta']
+    w = params['w']
+    r = params['r']
+    B = params['B']
+    h = params['h']
+    N = params['N']
+    M = params['M']
+
     # solve ha block
-    V, a, c = pol_ss(Pi, e_grid, a_grid, r, w, beta, B, h, gamma)
+    V, a, c = pol_ss(Pi, e_grid, a_grid, params, w, h)
     D = mathutils.dist_ss(a, Pi, a_grid)
 
     # return dictionary with results and inputs
@@ -229,10 +269,10 @@ def household_ss(Pi, a_grid, e_grid, r, w, beta, B, h, gamma):
 
 
 # In[71]:
-
-
-ssres = household_ss(Pi, a_grid, e_grid, r, w, beta, B, h, gamma)
-
+t0 = time.time()
+ssres = household_ss(Pi, a_grid, e_grid, params)
+t1 = time.time()
+total = t1-t0
 
 
 # In[72]:
