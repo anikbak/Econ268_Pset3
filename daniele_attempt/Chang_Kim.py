@@ -92,6 +92,8 @@ import ks
 # In[2]:
 
 
+
+
 def backward_VFI(VE_p, VU_p, Us, Pi_p, a_grid, e_grid, params, w, h, r):
     """Computes one backward iteration in the VFI algorithm
     Parameters
@@ -106,8 +108,6 @@ def backward_VFI(VE_p, VU_p, Us, Pi_p, a_grid, e_grid, params, w, h, r):
     params   : dictionary with useful parameters
     w        : scalar, wage
     h        : hours worked
-    r        : interest rate
-
     Returns
     ----------
     V  : array (S*A), marginal value of assets today
@@ -120,17 +120,18 @@ def backward_VFI(VE_p, VU_p, Us, Pi_p, a_grid, e_grid, params, w, h, r):
     M = params['M']
 
     #initializing next period V
-    V = np.zeros([N,M])
-    
+    V = np.zeros([N,M])    
+
     ExpV = np.maximum(VE_p,VU_p)
-    
+
     tomax = Us + np.tile(ExpV @ (beta * Pi_p),(N,1,1))        
     max_locs = np.argmax(tomax,axis=1)    
     apol = a_grid[max_locs]
-    cpol = w*e_grid*h + - apol + (1+r)*a_grid[:,np.newaxis]    
+    cpol = w*e_grid*h - apol + (1+r)*a_grid[:,np.newaxis]    
     
     for i in range(M):
         V[:,i] = tomax[range(0,N),max_locs[:,i],i]    
+
         
     return V, apol, cpol
 
@@ -153,12 +154,17 @@ def pol_ss(Pi, e_grid, a_grid, params, w, h, r, tol=1E-6, maxit=5000):
     a_tom = np.tile(a_grid,(N,1))
     a_tod = np.transpose(a_tom)
     atmp = (1+r)*a_tod - a_tom    
-    Cs = np.tile(w*e_grid*h,(N,N,1)) +  np.repeat(atmp[:, :, np.newaxis], M, axis=2)
+    CsE = np.tile(w*e_grid*h,(N,N,1)) +  np.repeat(atmp[:, :, np.newaxis], M, axis=2)
+    CsU = np.repeat(atmp[:, :, np.newaxis], M, axis=2)
     #imposing -Inf utility whenever there is negative consumption
-    neg_c = (Cs <= 0)
-    Cs[neg_c] = 10
-    Us = np.log(Cs) - B*(h**(1 + 1/gamma))/(1+ 1/gamma)
-    Us[neg_c] = -1e10
+    neg_cE = (CsE <= 0)
+    CsE[neg_cE] = 10
+    neg_cU = (CsU <= 0)
+    CsU[neg_cU] = 10
+    UsE = np.log(CsE) - B*(h**(1 + 1/gamma))/(1+ 1/gamma)
+    UsE[neg_cE] = -1e20
+    UsU = np.log(CsU)
+    UsU[neg_cU] = -1e20
 
     #initializing VFI 
     dist = np.inf   #improvement step
@@ -169,8 +175,8 @@ def pol_ss(Pi, e_grid, a_grid, params, w, h, r, tol=1E-6, maxit=5000):
     VU_p = np.zeros([N,M])     #initializing value function for employed
 
     while dist>tol and it<maxit:        
-        VE, apolE, cpolE = backward_VFI(VE_p, VU_p, Us, Pi, a_grid, e_grid, params, w, h, r)
-        VU, apolU, cpolU = backward_VFI(VE, VU_p, Us, Pi, a_grid, e_grid, params, w, 0, r)
+        VE, apolE, cpolE = backward_VFI(VE_p, VU_p, UsE, Pi, a_grid, e_grid, params, w, h, r)
+        VU, apolU, cpolU = backward_VFI(VE, VU_p, UsU, Pi, a_grid, e_grid, params, w, 0, r)
         V_p = np.maximum(VE_p,VU_p)    
         dist = np.amax(abs(V_p - np.maximum(VE,VU)))
         VE_p = np.copy(VE)
@@ -193,11 +199,11 @@ alpha = 0.64        #labor share
 beta = 0.98267      #discount factor 
 gamma = 0.4         #Frisch elasticity
 delta = 0.025       #Capital depreciation rate
-w = 585             #wage
+w = 70             #wage
 r = 0.01            #interest rate
 lam = 1             #productivity 
-amax=5000           #maximal assets
-amid = 2000         #up to here lots of points 
+amax= 1000           #maximal assets
+amid = 500         #up to here lots of points 
 amin=-2             #borrowing limit
 N = 1000            #number of grid points for assets
 M = 2               #number of grid points for productivity
@@ -221,10 +227,9 @@ params = {'alpha':alpha,
 
 
 # set up grid
-a_grid = np.linspace(amin, amid, num=int(N/2))
-
-a_grid = np.append(a_grid,np.linspace(amid,amax, num=int(N/2)))
-
+a_grid = np.linspace(amin, amid, num=int(0.75*N))
+a_grid = np.append(a_grid,np.linspace(amid,amax, num=int(0.25*N)))
+#a_grid = np.logspace(np.log10(1e-4),np.log10(amax),num=N) + amin
 
 #state transition matrix
 pUE=0.5
@@ -232,7 +237,8 @@ pEU=0.038
 b=0.15
 L = pUE / (pUE + pEU)  # labor endowment normalized to 1
 e_grid = np.array([b, 1 - (1 - L) / L * b])
-Pi = np.array([[1 - pUE, pUE], [pEU, 1 - pEU]])
+#Pi = np.array([[1 - pUE, pUE], [pEU, 1 - pEU]])
+Pi = np.array([[0.5, 0.5],[0.5,0.5]])
 #V, a, c = pol_ss(Pi, e_grid, a_grid, r, w, beta, B, h, gamma)
 
 
@@ -246,45 +252,45 @@ Pi = np.array([[1 - pUE, pUE], [pEU, 1 - pEU]])
 def household_ss(Pi, a_grid, e_grid, params, r):
     """Solve for steady-state policies and distribution. Report results in dict."""
     #getting parameters
-    beta = params['beta']
-    w = params['w']
+    beta = params['beta']    
     h = params['h']    
     lam = params['lam']
     alpha = params['alpha']
+    w = lam*(1-alpha)*(r + delta/(lam*alpha))**(alpha/(alpha-1))        
 
     # solve ha block
     V, a, c, e = pol_ss(Pi, e_grid, a_grid, params, w, h, r)
     D = mathutils.dist_ss(a, Pi, a_grid)
     A = np.vdot(D, a)
     C = np.vdot(D, c)
-    L = np.vdot(D,e)*h
-    rnew = lam*(A/L)**(alpha-1)
-    print("r clearing: " + str(rnew - r))
+    L = np.vdot(D,e)*h    
+    #rnew = lam*alpha*(A/L)**(alpha-1)
+    K = (C/((r+delta)/alpha - delta))
+    mkt_clear = A - K
+    print("market clearing: " + str(A - K))
+    #print("rental rate: " + str(rnew))
     # return dictionary with results and inputs
     inputs = {'Pi': Pi, 'a_grid': a_grid, 'e_grid': e_grid, 'r': r, 'w': w, 'beta': beta}
-    results = {'D': D, 'V': V, 'a': a, 'c': c, 'A': A, 'C': C, 'L': L,'rnew':rnew}
+    results = {'D': D, 'V': V, 'a': a, 'c': c, 'A': A, 'C': C, 'L': L,'K':K, 'mkt_clear':mkt_clear}
 
     return {**inputs, **results}
 
 # In[12]:
 
 
-def ks_ss(params, lr=1e-4, ur=0.2, r=0.01):
+def ks_ss(params, lr=1e-4, ur=0.06, r=0.01):
     """Solve steady state of full GE model. Calibrate beta to hit target for interest rate."""
     
     #extract parameters
     alpha = params['alpha']
     delta = params['delta']
     # solve for aggregates analitically
-    rk = r + delta
     lam = params['lam'] # normalize so that Y=1
-    w = lam*(1-alpha)*(rk/(lam*alpha))**((alpha-1)/alpha)
-    params['w'] = w
     params['h'] = h
 
     # solve for r consistent with market clearing
-    beta, results = opt.brentq(lambda r:
-                               household_ss(Pi, a_grid, e_grid, params, r)['rnew'] - rk,
+    r, results = opt.brentq(lambda r:
+                               household_ss(Pi, a_grid, e_grid, params, r)['mkt_clear'],
                                lr, ur, full_output=True)
     if not results.converged:
         raise ValueError('Steady-state solver did not converge.')
